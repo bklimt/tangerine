@@ -3,6 +3,7 @@ struct TokenSlice<'a> {
     line: usize,
     column: usize,
     offset: usize,
+    partial: bool,
 }
 
 impl<'a> TokenSlice<'a> {
@@ -12,6 +13,7 @@ impl<'a> TokenSlice<'a> {
             line: self.line,
             column: self.column,
             offset: self.offset,
+            partial: self.partial,
         };
     }
 }
@@ -21,10 +23,80 @@ struct Token {
     line: usize,
     column: usize,
     offset: usize,
+    partial: bool,
 }
 
 trait Indexer {
     fn process_token(&mut self, token: &TokenSlice);
+}
+
+fn split_token(token: &TokenSlice, indexer: &mut impl Indexer) {
+    #[derive(PartialEq)]
+    enum TokenState {
+        Start,
+        Nocase,
+        Uppercase,
+        Lowercase,
+        Digits,
+        End,
+    }
+
+    let mut chars_indices = token.token.char_indices();
+
+    let mut word_start = 0;
+    let mut word_end;
+    let mut next_state = TokenState::Start;
+    loop {
+        let previous_state = next_state;
+        if matches!(previous_state, TokenState::End) {
+            return;
+        }
+
+        if let Some((i, c)) = chars_indices.next() {
+            word_end = i;
+            if c.is_numeric() {
+                next_state = TokenState::Digits;
+            } else if c.is_lowercase() {
+                next_state = TokenState::Lowercase;
+            } else if c.is_uppercase() {
+                next_state = TokenState::Uppercase;
+            } else {
+                next_state = TokenState::Nocase;
+            }
+        } else {
+            word_end = token.token.len();
+            next_state = TokenState::End;
+        };
+
+        // If the state didn't change, continue the word.
+        if previous_state == next_state {
+            continue;
+        }
+        // If this is the first character, this can't be the start of a new token.
+        if matches!(previous_state, TokenState::Start) {
+            continue;
+        }
+        // If this is the end and the whole token was one word, skip it.
+        if matches!(next_state, TokenState::End) && word_start == 0 {
+            continue;
+        }
+        // If we go from uppercase to lowercase, that's fine.
+        if matches!(previous_state, TokenState::Uppercase)
+            && matches!(next_state, TokenState::Lowercase)
+        {
+            continue;
+        }
+
+        // Emit the word.
+        indexer.process_token(&TokenSlice {
+            token: &token.token[word_start..word_end],
+            line: token.line,
+            column: token.column,
+            offset: token.offset + word_start,
+            partial: true,
+        });
+        word_start = word_end;
+    }
 }
 
 fn parse_text(text: &str, indexer: &mut impl Indexer) {
@@ -71,12 +143,15 @@ fn parse_text(text: &str, indexer: &mut impl Indexer) {
         }
 
         // Then process the word.
-        indexer.process_token(&TokenSlice {
+        let token = TokenSlice {
             token: &text[start..end],
             line,
             column: word_column,
             offset: start,
-        });
+            partial: false,
+        };
+        indexer.process_token(&token);
+        split_token(&token, indexer);
 
         if ended_with_newline {
             line += 1;
@@ -117,6 +192,7 @@ mod tests {
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
+        assert_eq!(false, token.partial);
     }
 
     #[test]
@@ -132,12 +208,14 @@ mod tests {
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
+        assert_eq!(false, token.partial);
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
         assert_eq!(0, token.line);
         assert_eq!(4, token.column);
         assert_eq!(4, token.offset);
+        assert_eq!(false, token.partial);
     }
 
     #[test]
@@ -153,12 +231,14 @@ mod tests {
         assert_eq!(0, token.line);
         assert_eq!(2, token.column);
         assert_eq!(2, token.offset);
+        assert_eq!(false, token.partial);
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
         assert_eq!(0, token.line);
         assert_eq!(6, token.column);
         assert_eq!(6, token.offset);
+        assert_eq!(false, token.partial);
     }
 
     #[test]
@@ -174,12 +254,14 @@ mod tests {
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
+        assert_eq!(false, token.partial);
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
         assert_eq!(0, token.line);
         assert_eq!(4, token.column);
         assert_eq!(4, token.offset);
+        assert_eq!(false, token.partial);
     }
 
     #[test]
@@ -188,13 +270,35 @@ mod tests {
 
         parse_text("foo123bar", &mut index);
 
-        assert_eq!(1, index.tokens.len());
+        assert_eq!(4, index.tokens.len());
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("foo123bar", token.token);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
+        assert_eq!(false, token.partial);
+
+        let token = index.tokens.get(1).unwrap();
+        assert_eq!("foo", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(0, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(2).unwrap();
+        assert_eq!("123", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(3, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(3).unwrap();
+        assert_eq!("bar", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(6, token.offset);
+        assert_eq!(true, token.partial);
     }
 
     #[test]
@@ -210,12 +314,14 @@ mod tests {
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
+        assert_eq!(false, token.partial);
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
         assert_eq!(0, token.line);
         assert_eq!(4, token.column);
         assert_eq!(4, token.offset);
+        assert_eq!(false, token.partial);
     }
 
     #[test]
@@ -224,13 +330,35 @@ mod tests {
 
         parse_text("FooBar123", &mut index);
 
-        assert_eq!(1, index.tokens.len());
+        assert_eq!(4, index.tokens.len());
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("FooBar123", token.token);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
+        assert_eq!(false, token.partial);
+
+        let token = index.tokens.get(1).unwrap();
+        assert_eq!("Foo", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(0, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(2).unwrap();
+        assert_eq!("Bar", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(3, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(3).unwrap();
+        assert_eq!("123", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(6, token.offset);
+        assert_eq!(true, token.partial);
     }
 
     #[test]
@@ -239,19 +367,56 @@ mod tests {
 
         parse_text("福 福foo福bar福", &mut index);
 
-        assert_eq!(2, index.tokens.len());
+        assert_eq!(7, index.tokens.len());
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("福", token.token);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
+        assert_eq!(false, token.partial);
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("福foo福bar福", token.token);
         assert_eq!(0, token.line);
         assert_eq!(2, token.column);
         assert_eq!(4, token.offset);
+        assert_eq!(false, token.partial);
+
+        let token = index.tokens.get(2).unwrap();
+        assert_eq!("福", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(2, token.column);
+        assert_eq!(4, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(3).unwrap();
+        assert_eq!("foo", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(2, token.column);
+        assert_eq!(7, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(4).unwrap();
+        assert_eq!("福", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(2, token.column);
+        assert_eq!(10, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(5).unwrap();
+        assert_eq!("bar", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(2, token.column);
+        assert_eq!(13, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(6).unwrap();
+        assert_eq!("福", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(2, token.column);
+        assert_eq!(16, token.offset);
+        assert_eq!(true, token.partial);
     }
 
     #[test]
@@ -267,12 +432,14 @@ mod tests {
         assert_eq!(0, token.line);
         assert_eq!(3, token.column);
         assert_eq!(9, token.offset);
+        assert_eq!(false, token.partial);
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
         assert_eq!(0, token.line);
         assert_eq!(7, token.column);
         assert_eq!(16, token.offset);
+        assert_eq!(false, token.partial);
     }
 
     #[test]
@@ -288,11 +455,13 @@ mod tests {
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
+        assert_eq!(false, token.partial);
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
         assert_eq!(2, token.line);
         assert_eq!(2, token.column);
         assert_eq!(9, token.offset);
+        assert_eq!(false, token.partial);
     }
 }
