@@ -1,36 +1,16 @@
-struct TokenSlice<'a> {
-    token: &'a str,
-    line: usize,
-    column: usize,
-    offset: usize,
-    partial: bool,
+pub struct TokenSlice<'a> {
+    pub token: &'a str,
+    pub line: usize,
+    pub column: usize,
+    pub offset: usize,
+    pub partial: bool,
 }
 
-impl<'a> TokenSlice<'a> {
-    fn to_token(&self) -> Token {
-        return Token {
-            token: self.token.to_string(),
-            line: self.line,
-            column: self.column,
-            offset: self.offset,
-            partial: self.partial,
-        };
-    }
-}
-
-struct Token {
-    token: String,
-    line: usize,
-    column: usize,
-    offset: usize,
-    partial: bool,
-}
-
-trait Indexer {
+pub trait TokenProcessor {
     fn process_token(&mut self, token: &TokenSlice);
 }
 
-fn split_token(token: &TokenSlice, indexer: &mut impl Indexer) {
+fn split_token(token: &TokenSlice, indexer: &mut impl TokenProcessor) {
     #[derive(PartialEq)]
     enum TokenState {
         Start,
@@ -132,12 +112,12 @@ fn split_token(token: &TokenSlice, indexer: &mut impl Indexer) {
     }
 }
 
-fn parse_text(text: &str, indexer: &mut impl Indexer) {
+pub fn parse_text(text: &str, indexer: &mut impl TokenProcessor) {
     let mut start;
     let mut end;
     let mut line = 0;
     let mut column = 0;
-    let mut word_column = 0;
+    let mut word_column;
     let mut chars_indices = text.char_indices();
     loop {
         // Skip to the next alphanumeric character.
@@ -196,6 +176,26 @@ fn parse_text(text: &str, indexer: &mut impl Indexer) {
 mod tests {
     use super::*;
 
+    impl<'a> TokenSlice<'a> {
+        fn to_token(&self) -> Token {
+            return Token {
+                token: self.token.to_string(),
+                line: self.line,
+                column: self.column,
+                offset: self.offset,
+                partial: self.partial,
+            };
+        }
+    }
+
+    struct Token {
+        token: String,
+        line: usize,
+        column: usize,
+        offset: usize,
+        partial: bool,
+    }
+
     struct TestIndex {
         tokens: Vec<Token>,
     }
@@ -206,7 +206,7 @@ mod tests {
         }
     }
 
-    impl Indexer for TestIndex {
+    impl TokenProcessor for TestIndex {
         fn process_token(&mut self, token: &TokenSlice) {
             self.tokens.push(token.to_token());
         }
