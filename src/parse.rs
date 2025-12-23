@@ -41,19 +41,25 @@ fn split_token(token: &TokenSlice, indexer: &mut impl Indexer) {
         End,
     }
 
-    let mut chars_indices = token.token.char_indices();
+    let mut chars_indices = token.token.char_indices().peekable();
 
     let mut word_start = 0;
     let mut word_end;
     let mut next_state = TokenState::Start;
+    // In order to undo one read, we peek, and only call next if this is true.
+    let mut consume_next = false;
     loop {
         let previous_state = next_state;
         if matches!(previous_state, TokenState::End) {
             return;
         }
 
-        if let Some((i, c)) = chars_indices.next() {
-            word_end = i;
+        if consume_next {
+            chars_indices.next();
+        }
+        consume_next = true;
+        if let Some((i, c)) = chars_indices.peek() {
+            word_end = *i;
             if c.is_numeric() {
                 next_state = TokenState::Digits;
             } else if c.is_lowercase() {
@@ -80,10 +86,37 @@ fn split_token(token: &TokenSlice, indexer: &mut impl Indexer) {
         if matches!(next_state, TokenState::End) && word_start == 0 {
             continue;
         }
-        // If we go from uppercase to lowercase, that's fine.
+        // If we go from uppercase to lowercase and is one character, that's fine.
         if matches!(previous_state, TokenState::Uppercase)
             && matches!(next_state, TokenState::Lowercase)
         {
+            // Well, if they are one uppercase character at least.
+            if word_end - word_start == 1 {
+                continue;
+            }
+
+            // Find the length of the last character in the token so far.
+            let word = &token.token[word_start..word_end];
+            let Some((last_char, _)) = word.char_indices().last() else {
+                continue;
+            };
+            let last_char_len = word.len() - last_char;
+            if last_char_len == word.len() {
+                continue;
+            }
+
+            // If it was a longer uppercase sequence, emit all but the last byte.
+            indexer.process_token(&TokenSlice {
+                token: &token.token[word_start..word_end - last_char_len],
+                line: token.line,
+                column: token.column,
+                offset: token.offset + word_start,
+                partial: true,
+            });
+            word_start = word_end - last_char_len;
+
+            // Rewind by one character.
+            consume_next = false;
             continue;
         }
 
@@ -463,5 +496,79 @@ mod tests {
         assert_eq!(2, token.column);
         assert_eq!(9, token.offset);
         assert_eq!(false, token.partial);
+    }
+
+    #[test]
+    fn test_parse_text_with_initialism() {
+        let mut index = TestIndex::new();
+
+        parse_text("XMLHttpRequest", &mut index);
+
+        assert_eq!(4, index.tokens.len());
+
+        let token = index.tokens.get(0).unwrap();
+        assert_eq!("XMLHttpRequest", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(0, token.offset);
+        assert_eq!(false, token.partial);
+
+        let token = index.tokens.get(1).unwrap();
+        assert_eq!("XML", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(0, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(2).unwrap();
+        assert_eq!("Http", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(3, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(3).unwrap();
+        assert_eq!("Request", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(7, token.offset);
+        assert_eq!(true, token.partial);
+    }
+
+    #[test]
+    fn test_parse_text_with_wide_initialism() {
+        let mut index = TestIndex::new();
+
+        parse_text("ÜÜÜÜttpÜequest", &mut index);
+
+        assert_eq!(4, index.tokens.len());
+
+        let token = index.tokens.get(0).unwrap();
+        assert_eq!("ÜÜÜÜttpÜequest", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(0, token.offset);
+        assert_eq!(false, token.partial);
+
+        let token = index.tokens.get(1).unwrap();
+        assert_eq!("ÜÜÜ", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(0, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(2).unwrap();
+        assert_eq!("Üttp", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(6, token.offset);
+        assert_eq!(true, token.partial);
+
+        let token = index.tokens.get(3).unwrap();
+        assert_eq!("Üequest", token.token);
+        assert_eq!(0, token.line);
+        assert_eq!(0, token.column);
+        assert_eq!(11, token.offset);
+        assert_eq!(true, token.partial);
     }
 }
