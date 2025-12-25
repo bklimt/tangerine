@@ -1,9 +1,15 @@
+// Metadata about one occurrence of a token in a document.
+pub struct Occurrence {
+    pub position: usize, // N means this is the nth word in the doc
+    pub offset: usize,   // the byte offset of the start of the word in the doc
+    pub line: usize,     // which line the word is on
+    pub column: usize,   // the character offset of the start of the word in the line
+    pub partial: bool,   // whether this is just part of a word or the whole word
+}
+
 pub struct TokenSlice<'a> {
     pub token: &'a str,
-    pub line: usize,
-    pub column: usize,
-    pub offset: usize,
-    pub partial: bool,
+    pub occurrence: Occurrence,
 }
 
 pub trait TokenProcessor {
@@ -88,10 +94,13 @@ fn split_token(token: &TokenSlice, indexer: &mut impl TokenProcessor) {
             // If it was a longer uppercase sequence, emit all but the last byte.
             indexer.process_token(&TokenSlice {
                 token: &token.token[word_start..word_end - last_char_len],
-                line: token.line,
-                column: token.column,
-                offset: token.offset + word_start,
-                partial: true,
+                occurrence: Occurrence {
+                    position: token.occurrence.position,
+                    line: token.occurrence.line,
+                    column: token.occurrence.column,
+                    offset: token.occurrence.offset + word_start,
+                    partial: true,
+                },
             });
             word_start = word_end - last_char_len;
 
@@ -103,10 +112,13 @@ fn split_token(token: &TokenSlice, indexer: &mut impl TokenProcessor) {
         // Emit the word.
         indexer.process_token(&TokenSlice {
             token: &token.token[word_start..word_end],
-            line: token.line,
-            column: token.column,
-            offset: token.offset + word_start,
-            partial: true,
+            occurrence: Occurrence {
+                position: token.occurrence.position,
+                line: token.occurrence.line,
+                column: token.occurrence.column,
+                offset: token.occurrence.offset + word_start,
+                partial: true,
+            },
         });
         word_start = word_end;
     }
@@ -119,6 +131,7 @@ pub fn parse_text(text: &str, indexer: &mut impl TokenProcessor) {
     let mut column = 0;
     let mut word_column;
     let mut chars_indices = text.char_indices();
+    let mut position = 0;
     loop {
         // Skip to the next alphanumeric character.
         loop {
@@ -158,13 +171,17 @@ pub fn parse_text(text: &str, indexer: &mut impl TokenProcessor) {
         // Then process the word.
         let token = TokenSlice {
             token: &text[start..end],
-            line,
-            column: word_column,
-            offset: start,
-            partial: false,
+            occurrence: Occurrence {
+                position: position,
+                line,
+                column: word_column,
+                offset: start,
+                partial: false,
+            },
         };
         indexer.process_token(&token);
         split_token(&token, indexer);
+        position += 1;
 
         if ended_with_newline {
             line += 1;
@@ -180,16 +197,18 @@ mod tests {
         fn to_token(&self) -> Token {
             return Token {
                 token: self.token.to_string(),
-                line: self.line,
-                column: self.column,
-                offset: self.offset,
-                partial: self.partial,
+                position: self.occurrence.position,
+                line: self.occurrence.line,
+                column: self.occurrence.column,
+                offset: self.occurrence.offset,
+                partial: self.occurrence.partial,
             };
         }
     }
 
     struct Token {
         token: String,
+        position: usize,
         line: usize,
         column: usize,
         offset: usize,
@@ -222,6 +241,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("foo", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -238,6 +258,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("foo", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -245,6 +266,7 @@ mod tests {
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(0, token.line);
         assert_eq!(4, token.column);
         assert_eq!(4, token.offset);
@@ -261,12 +283,14 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("foo", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(2, token.column);
         assert_eq!(2, token.offset);
         assert_eq!(false, token.partial);
 
         let token = index.tokens.get(1).unwrap();
+        assert_eq!(1, token.position);
         assert_eq!("bar", token.token);
         assert_eq!(0, token.line);
         assert_eq!(6, token.column);
@@ -284,6 +308,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("foo", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -291,6 +316,7 @@ mod tests {
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(0, token.line);
         assert_eq!(4, token.column);
         assert_eq!(4, token.offset);
@@ -307,6 +333,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("foo123bar", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -314,6 +341,7 @@ mod tests {
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("foo", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -321,6 +349,7 @@ mod tests {
 
         let token = index.tokens.get(2).unwrap();
         assert_eq!("123", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(3, token.offset);
@@ -328,6 +357,7 @@ mod tests {
 
         let token = index.tokens.get(3).unwrap();
         assert_eq!("bar", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(6, token.offset);
@@ -344,6 +374,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("foo", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -351,6 +382,7 @@ mod tests {
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(0, token.line);
         assert_eq!(4, token.column);
         assert_eq!(4, token.offset);
@@ -367,6 +399,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("FooBar123", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -374,6 +407,7 @@ mod tests {
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("Foo", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -381,6 +415,7 @@ mod tests {
 
         let token = index.tokens.get(2).unwrap();
         assert_eq!("Bar", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(3, token.offset);
@@ -388,6 +423,7 @@ mod tests {
 
         let token = index.tokens.get(3).unwrap();
         assert_eq!("123", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(6, token.offset);
@@ -404,6 +440,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("福", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -411,6 +448,7 @@ mod tests {
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("福foo福bar福", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(0, token.line);
         assert_eq!(2, token.column);
         assert_eq!(4, token.offset);
@@ -418,6 +456,7 @@ mod tests {
 
         let token = index.tokens.get(2).unwrap();
         assert_eq!("福", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(0, token.line);
         assert_eq!(2, token.column);
         assert_eq!(4, token.offset);
@@ -425,6 +464,7 @@ mod tests {
 
         let token = index.tokens.get(3).unwrap();
         assert_eq!("foo", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(0, token.line);
         assert_eq!(2, token.column);
         assert_eq!(7, token.offset);
@@ -432,6 +472,7 @@ mod tests {
 
         let token = index.tokens.get(4).unwrap();
         assert_eq!("福", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(0, token.line);
         assert_eq!(2, token.column);
         assert_eq!(10, token.offset);
@@ -439,6 +480,7 @@ mod tests {
 
         let token = index.tokens.get(5).unwrap();
         assert_eq!("bar", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(0, token.line);
         assert_eq!(2, token.column);
         assert_eq!(13, token.offset);
@@ -446,6 +488,7 @@ mod tests {
 
         let token = index.tokens.get(6).unwrap();
         assert_eq!("福", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(0, token.line);
         assert_eq!(2, token.column);
         assert_eq!(16, token.offset);
@@ -462,6 +505,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("foo", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(3, token.column);
         assert_eq!(9, token.offset);
@@ -469,6 +513,7 @@ mod tests {
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(0, token.line);
         assert_eq!(7, token.column);
         assert_eq!(16, token.offset);
@@ -485,6 +530,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("foo", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -492,6 +538,7 @@ mod tests {
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("bar", token.token);
+        assert_eq!(1, token.position);
         assert_eq!(2, token.line);
         assert_eq!(2, token.column);
         assert_eq!(9, token.offset);
@@ -508,6 +555,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("XMLHttpRequest", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -515,6 +563,7 @@ mod tests {
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("XML", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -522,6 +571,7 @@ mod tests {
 
         let token = index.tokens.get(2).unwrap();
         assert_eq!("Http", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(3, token.offset);
@@ -529,6 +579,7 @@ mod tests {
 
         let token = index.tokens.get(3).unwrap();
         assert_eq!("Request", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(7, token.offset);
@@ -545,6 +596,7 @@ mod tests {
 
         let token = index.tokens.get(0).unwrap();
         assert_eq!("ÜÜÜÜttpÜequest", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -552,6 +604,7 @@ mod tests {
 
         let token = index.tokens.get(1).unwrap();
         assert_eq!("ÜÜÜ", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(0, token.offset);
@@ -559,6 +612,7 @@ mod tests {
 
         let token = index.tokens.get(2).unwrap();
         assert_eq!("Üttp", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(6, token.offset);
@@ -566,6 +620,7 @@ mod tests {
 
         let token = index.tokens.get(3).unwrap();
         assert_eq!("Üequest", token.token);
+        assert_eq!(0, token.position);
         assert_eq!(0, token.line);
         assert_eq!(0, token.column);
         assert_eq!(11, token.offset);

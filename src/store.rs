@@ -1,17 +1,46 @@
-use fjall::{Error, Partition, Slice};
+use crate::error::Error;
+use crate::index::TermData;
+use bytes::{Buf, BufMut, BytesMut};
+use fjall::{Partition, Slice};
 
-pub trait KeyValueStore {
-    // TODO: Clean up these types.
-    fn prefix(&self, prefix: &str) -> impl Iterator<Item = Result<(Slice, Slice), Error>>;
-}
-
-struct FjallStore {
+pub struct TermStore {
     db: Partition,
 }
 
-impl KeyValueStore for FjallStore {
-    fn prefix(&self, prefix: &str) -> impl Iterator<Item = Result<(Slice, Slice), Error>> {
-        self.db.prefix(prefix)
+impl TermStore {
+    pub fn get(&self, term: &str) -> Result<Option<TermData>, Error> {
+        match self.db.get(term) {
+            Ok(Some(slice)) => TermData::try_from(slice).map(|d| Some(d)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Error::FjallError(e)),
+        }
+    }
+
+    pub fn put(&mut self, term: &str, data: &TermData) -> Result<(), Error> {
+        self.db.insert(term, data).map_err(|e| Error::FjallError(e))
+    }
+}
+
+impl TryFrom<Slice> for TermData {
+    type Error = Error;
+
+    fn try_from(value: Slice) -> Result<Self, Error> {
+        let mut bytes = BytesMut::from(&value[..]);
+        let count = bytes.try_get_u64()?;
+        let document_count = bytes.try_get_u64()?;
+        Ok(TermData {
+            count,
+            document_count,
+        })
+    }
+}
+
+impl From<&TermData> for Slice {
+    fn from(value: &TermData) -> Self {
+        let mut bytes = BytesMut::with_capacity(8 * 2);
+        bytes.put_u64(value.count);
+        bytes.put_u64(value.document_count);
+        Slice::new(&bytes[..])
     }
 }
 
@@ -22,21 +51,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_fjall_store() -> Result<(), Error> {
+    fn test_term_store() -> Result<(), Error> {
         let keyspace = Config::new("/tmp/tangerine/testdata").open()?;
         let options = PartitionCreateOptions::default();
         let db = keyspace.open_partition("basic", options)?;
-        let store = FjallStore { db };
-        store.db.insert("a", "b")?;
+        let mut store = TermStore { db };
 
-        let actual: Result<Vec<(Slice, Slice)>, Error> = store.prefix("a").collect();
-        let actual = actual?;
+        let term_data = TermData {
+            count: 1,
+            document_count: 2,
+        };
+        store.put("a", &term_data)?;
 
-        assert_eq!(1, actual.len());
-        assert_eq!(
-            (Slice::new("a".as_bytes()), Slice::new("b".as_bytes())),
-            *actual.get(0).unwrap()
-        );
+        let actual = store.get("a")?.unwrap();
+
+        assert_eq!(1, actual.count);
+        assert_eq!(2, actual.document_count);
 
         Ok(())
     }
