@@ -1,5 +1,5 @@
-use crate::error::Error;
 use crate::index::TermData;
+use crate::{error::Error, index::DocumentData};
 use bytes::{Buf, BufMut, BytesMut};
 use fjall::{Partition, Slice};
 
@@ -44,6 +44,42 @@ impl From<&TermData> for Slice {
     }
 }
 
+pub struct DocumentStore {
+    db: Partition,
+}
+
+impl DocumentStore {
+    pub fn get(&self, term: &str) -> Result<Option<DocumentData>, Error> {
+        match self.db.get(term) {
+            Ok(Some(slice)) => DocumentData::try_from(slice).map(|d| Some(d)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Error::FjallError(e)),
+        }
+    }
+
+    pub fn put(&mut self, term: &str, data: &DocumentData) -> Result<(), Error> {
+        self.db.insert(term, data).map_err(|e| Error::FjallError(e))
+    }
+}
+
+impl TryFrom<Slice> for DocumentData {
+    type Error = Error;
+
+    fn try_from(value: Slice) -> Result<Self, Error> {
+        let mut bytes = BytesMut::from(&value[..]);
+        let length = bytes.try_get_u64()?;
+        Ok(DocumentData { length })
+    }
+}
+
+impl From<&DocumentData> for Slice {
+    fn from(value: &DocumentData) -> Self {
+        let mut bytes = BytesMut::with_capacity(8 * 2);
+        bytes.put_u64(value.length);
+        Slice::new(&bytes[..])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use fjall::{Config, PartitionCreateOptions};
@@ -67,6 +103,23 @@ mod tests {
 
         assert_eq!(1, actual.count);
         assert_eq!(2, actual.document_count);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_document_store() -> Result<(), Error> {
+        let keyspace = Config::new("/tmp/tangerine/testdata").open()?;
+        let options = PartitionCreateOptions::default();
+        let db = keyspace.open_partition("basic", options)?;
+        let mut store = DocumentStore { db };
+
+        let doc_data = DocumentData { length: 3 };
+        store.put("a", &doc_data)?;
+
+        let actual = store.get("a")?.unwrap();
+
+        assert_eq!(3, actual.length);
 
         Ok(())
     }
