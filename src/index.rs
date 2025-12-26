@@ -174,6 +174,22 @@ mod tests {
             term_data: &Vec<TermData>,
             doc_term_data: &Vec<DocumentTermData>,
         ) -> f32 {
+            if doc_data.length == 101 {
+                for term_data in doc_term_data {
+                    // TODO: Check this.
+                }
+            } else if doc_data.length == 201 {
+                for term_data in doc_term_data {
+                    // TODO: Check this.
+                }
+            } else {
+                assert!(false, "unknown document {}", doc_data.length);
+            }
+
+            for term in term_data {
+                // TODO: Pass the term in here.
+            }
+
             // TODO: Implement something better here.
             return doc_data.length as f32;
         }
