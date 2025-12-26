@@ -61,16 +61,18 @@ impl DocumentStore {
         Ok(DocumentStore { db })
     }
 
-    pub fn get(&self, term: &str) -> Result<Option<DocumentData>, Error> {
-        match self.db.get(term) {
+    pub fn get(&self, id: DocumentId) -> Result<Option<DocumentData>, Error> {
+        match self.db.get(id.to_be_bytes()) {
             Ok(Some(slice)) => DocumentData::try_from(slice).map(|d| Some(d)),
             Ok(None) => Ok(None),
             Err(e) => Err(Error::FjallError(e)),
         }
     }
 
-    pub fn put(&self, term: &str, data: &DocumentData) -> Result<(), Error> {
-        self.db.insert(term, data).map_err(|e| Error::FjallError(e))
+    pub fn put(&self, id: DocumentId, data: &DocumentData) -> Result<(), Error> {
+        self.db
+            .insert(id.to_be_bytes(), data)
+            .map_err(|e| Error::FjallError(e))
     }
 }
 
@@ -215,9 +217,9 @@ mod tests {
         let store = DocumentStore::with_keyspace(&keyspace)?;
 
         let doc_data = DocumentData { length: 3 };
-        store.put("a", &doc_data)?;
+        store.put(123, &doc_data)?;
 
-        let actual = store.get("a")?.unwrap();
+        let actual = store.get(123)?.unwrap();
 
         assert_eq!(3, actual.length);
 
