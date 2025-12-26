@@ -1,4 +1,6 @@
 use fjall::Config;
+use ordered_float::OrderedFloat;
+use priority_queue::PriorityQueue;
 
 use crate::{
     error::Error,
@@ -55,6 +57,15 @@ struct InvertedIndex {
     postings: PostingListStore,
 }
 
+trait Scorer {
+    fn score(
+        &self,
+        doc_data: &DocumentData,
+        term_data: &Vec<TermData>,
+        doc_term_data: &Vec<DocumentTermData>,
+    ) -> f32;
+}
+
 impl InvertedIndex {
     pub fn new(path: &str) -> Result<Self, Error> {
         let keyspace = Config::new(path).open()?;
@@ -69,7 +80,12 @@ impl InvertedIndex {
     }
 
     // A search where all terms are required.
-    fn search(&self, terms: &[String]) -> Result<Vec<DocumentId>, Error> {
+    fn search(
+        &self,
+        terms: &[String],
+        scorer: impl Scorer,
+        max_docs: i32,
+    ) -> Result<Vec<DocumentId>, Error> {
         // Look up the data for each term.
         let term_data: Result<Vec<Option<TermData>>, Error> =
             terms.iter().map(|term| self.terms.get(term)).collect();
@@ -84,6 +100,8 @@ impl InvertedIndex {
             .iter()
             .map(|term| self.postings.get(term).peekable())
             .collect();
+
+        let mut top_docs = PriorityQueue::new();
 
         loop {
             // Find the lowest id doc to score.
@@ -128,8 +146,98 @@ impl InvertedIndex {
                     }
                 }
             }
+
+            let score = scorer.score(&doc_data, &term_data, &doc_term_data);
+            top_docs.push(first_doc, OrderedFloat(-score));
+            if top_docs.len() as i32 > max_docs {
+                top_docs.pop();
+            }
         }
 
-        Ok(vec![])
+        let results = top_docs.iter().rev().map(|(id, _score)| *id).collect();
+
+        Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    struct TestScorer {}
+
+    impl Scorer for TestScorer {
+        fn score(
+            &self,
+            doc_data: &DocumentData,
+            term_data: &Vec<TermData>,
+            doc_term_data: &Vec<DocumentTermData>,
+        ) -> f32 {
+            // TODO: Implement something better here.
+            return doc_data.length as f32;
+        }
+    }
+
+    // TODO: Add tests where various entries are missing.
+    // TODO: Add tests for max doc limit.
+    #[test]
+    fn test_search() -> Result<(), Error> {
+        let terms: HashMap<String, TermData> = [
+            (
+                "a".to_string(),
+                TermData {
+                    count: 1,
+                    document_count: 2,
+                },
+            ),
+            (
+                "b".to_string(),
+                TermData {
+                    count: 3,
+                    document_count: 4,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let documents: HashMap<u128, DocumentData> = [
+            (100, DocumentData { length: 101 }),
+            (200, DocumentData { length: 201 }),
+        ]
+        .into_iter()
+        .collect();
+
+        let document_term_data: HashMap<(String, u128), DocumentTermData> = [
+            (("a".to_string(), 100), DocumentTermData { count: 5 }),
+            (("b".to_string(), 100), DocumentTermData { count: 6 }),
+            (("a".to_string(), 200), DocumentTermData { count: 7 }),
+            (("b".to_string(), 200), DocumentTermData { count: 8 }),
+        ]
+        .into_iter()
+        .collect();
+
+        let index = InvertedIndex::new("/tmp/tangerine/testdata")?;
+
+        for (term, data) in terms.iter() {
+            index.terms.put(&term, data)?;
+        }
+        for (doc, data) in documents.iter() {
+            index.docs.put(*doc, data)?;
+        }
+        for ((term, doc), data) in document_term_data.iter() {
+            index.postings.put(&term, *doc, data)?;
+        }
+
+        let scorer = TestScorer {};
+        let query: Vec<String> = ["a", "b"].into_iter().map(|s| s.to_string()).collect();
+        let results = index.search(&query, scorer, 10)?;
+
+        assert_eq!(2, results.len());
+        assert_eq!(200, *results.get(0).unwrap());
+        assert_eq!(100, *results.get(1).unwrap());
+
+        Ok(())
     }
 }

@@ -8,4 +8,6 @@ anyhow = "1.0.100"
 bytes = "1.11.0"
 clap = { version = "4.5.53", features = ["derive"] }
 fjall = "2.11.2"
+ordered-float = "5.1.0"
+priority-queue = "2.7.0"
 thiserror = "2.0.17"
