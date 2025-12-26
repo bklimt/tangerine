@@ -218,7 +218,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        let index = InvertedIndex::new("/tmp/tangerine/testdata")?;
+        let index = InvertedIndex::new("/tmp/tangerine/search_tests")?;
 
         for (term, data) in terms.iter() {
             index.terms.put(&term, data)?;
