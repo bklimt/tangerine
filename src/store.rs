@@ -1,13 +1,19 @@
 use crate::index::{DocumentId, DocumentTermData, TermData};
 use crate::{error::Error, index::DocumentData};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use fjall::{Partition, Slice};
+use fjall::{Keyspace, Partition, PartitionCreateOptions, Slice};
 
 pub struct TermStore {
     db: Partition,
 }
 
 impl TermStore {
+    pub fn with_keyspace(keyspace: &Keyspace) -> Result<Self, Error> {
+        let options = PartitionCreateOptions::default();
+        let db = keyspace.open_partition("terms", options)?;
+        Ok(TermStore { db })
+    }
+
     pub fn get(&self, term: &str) -> Result<Option<TermData>, Error> {
         match self.db.get(term) {
             Ok(Some(slice)) => TermData::try_from(slice).map(|d| Some(d)),
@@ -49,6 +55,12 @@ pub struct DocumentStore {
 }
 
 impl DocumentStore {
+    pub fn with_keyspace(keyspace: &Keyspace) -> Result<Self, Error> {
+        let options = PartitionCreateOptions::default();
+        let db = keyspace.open_partition("docs", options)?;
+        Ok(DocumentStore { db })
+    }
+
     pub fn get(&self, term: &str) -> Result<Option<DocumentData>, Error> {
         match self.db.get(term) {
             Ok(Some(slice)) => DocumentData::try_from(slice).map(|d| Some(d)),
@@ -120,6 +132,12 @@ pub struct PostingListStore {
 }
 
 impl PostingListStore {
+    pub fn with_keyspace(keyspace: &Keyspace) -> Result<Self, Error> {
+        let options = PartitionCreateOptions::default();
+        let db = keyspace.open_partition("postings", options)?;
+        Ok(PostingListStore { db })
+    }
+
     pub fn get(
         &self,
         term: &str,
@@ -168,16 +186,14 @@ impl From<&DocumentTermData> for Slice {
 
 #[cfg(test)]
 mod tests {
-    use fjall::{Config, PartitionCreateOptions};
+    use fjall::Config;
 
     use super::*;
 
     #[test]
     fn test_term_store() -> Result<(), Error> {
         let keyspace = Config::new("/tmp/tangerine/testdata").open()?;
-        let options = PartitionCreateOptions::default();
-        let db = keyspace.open_partition("basic", options)?;
-        let store = TermStore { db };
+        let store = TermStore::with_keyspace(&keyspace)?;
 
         let term_data = TermData {
             count: 1,
@@ -196,9 +212,7 @@ mod tests {
     #[test]
     fn test_document_store() -> Result<(), Error> {
         let keyspace = Config::new("/tmp/tangerine/testdata").open()?;
-        let options = PartitionCreateOptions::default();
-        let db = keyspace.open_partition("basic", options)?;
-        let store = DocumentStore { db };
+        let store = DocumentStore::with_keyspace(&keyspace)?;
 
         let doc_data = DocumentData { length: 3 };
         store.put("a", &doc_data)?;
@@ -213,9 +227,7 @@ mod tests {
     #[test]
     fn test_posting_list_store() -> Result<(), Error> {
         let keyspace = Config::new("/tmp/tangerine/testdata").open()?;
-        let options = PartitionCreateOptions::default();
-        let db = keyspace.open_partition("basic", options)?;
-        let store = PostingListStore { db };
+        let store = PostingListStore::with_keyspace(&keyspace)?;
 
         let doc_data = DocumentTermData { count: 4 };
         store.put("a", 1, &doc_data)?;

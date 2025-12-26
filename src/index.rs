@@ -1,4 +1,9 @@
-use bytes::{BufMut, Bytes, BytesMut};
+use fjall::Config;
+
+use crate::{
+    error::Error,
+    store::{DocumentStore, PostingListStore, TermStore},
+};
 
 pub type DocumentId = u128;
 
@@ -20,12 +25,24 @@ pub struct DocumentTermData {
 // is a list of all the documents that the word is in, sorted
 // by their unique id. The entry also contains metadata about
 // the word, such as where in the document the word appeared.
-struct InvertedIndex {}
+struct InvertedIndex {
+    terms: TermStore,
+    docs: DocumentStore,
+    postings: PostingListStore,
+}
 
 impl InvertedIndex {
-    /*
-    fn get(token: &str) -> impl Iterator<Item = Result<DocumentTermData, Error>> {
-
+    pub fn new(path: &str) -> Result<Self, Error> {
+        let keyspace = Config::new("/tmp/tangerine/testdata").open()?;
+        let terms = TermStore::with_keyspace(&keyspace)?;
+        let docs = DocumentStore::with_keyspace(&keyspace)?;
+        let postings = PostingListStore::with_keyspace(&keyspace)?;
+        Ok(InvertedIndex {
+            terms,
+            docs,
+            postings,
+        })
     }
-    */
+
+    fn search() {}
 }
