@@ -1,5 +1,8 @@
+use std::io::Cursor;
+
 use crate::index::{DocumentId, DocumentTermData, TermData};
 use crate::{error::Error, index::DocumentData};
+use brotopuf::{Deserialize, Serialize};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use fjall::{Keyspace, Partition, PartitionCreateOptions, Slice};
 
@@ -18,12 +21,12 @@ impl TermStore {
         match self.db.get(term) {
             Ok(Some(slice)) => TermData::try_from(slice).map(|d| Some(d)),
             Ok(None) => Ok(None),
-            Err(e) => Err(Error::FjallError(e)),
+            Err(e) => Err(e.into()),
         }
     }
 
     pub fn put(&self, term: &str, data: &TermData) -> Result<(), Error> {
-        self.db.insert(term, data).map_err(|e| Error::FjallError(e))
+        Ok(self.db.insert(term, data)?)
     }
 }
 
@@ -31,22 +34,18 @@ impl TryFrom<Slice> for TermData {
     type Error = Error;
 
     fn try_from(value: Slice) -> Result<Self, Error> {
-        let mut bytes = BytesMut::from(&value[..]);
-        let count = bytes.try_get_u64()?;
-        let document_count = bytes.try_get_u64()?;
-        Ok(TermData {
-            count,
-            document_count,
-        })
+        let mut buffer = Cursor::new(&value[..]);
+        let mut term_data = TermData::zero();
+        term_data.deserialize(buffer.get_mut())?;
+        Ok(term_data)
     }
 }
 
 impl From<&TermData> for Slice {
     fn from(value: &TermData) -> Self {
-        let mut bytes = BytesMut::with_capacity(8 * 2);
-        bytes.put_u64(value.count);
-        bytes.put_u64(value.document_count);
-        Slice::new(&bytes[..])
+        let mut buffer = Vec::new();
+        value.serialize(&mut buffer).unwrap();
+        Slice::new(&buffer[..])
     }
 }
 
@@ -65,14 +64,12 @@ impl DocumentStore {
         match self.db.get(id.to_be_bytes()) {
             Ok(Some(slice)) => DocumentData::try_from(slice).map(|d| Some(d)),
             Ok(None) => Ok(None),
-            Err(e) => Err(Error::FjallError(e)),
+            Err(e) => Err(e.into()),
         }
     }
 
     pub fn put(&self, id: DocumentId, data: &DocumentData) -> Result<(), Error> {
-        self.db
-            .insert(id.to_be_bytes(), data)
-            .map_err(|e| Error::FjallError(e))
+        Ok(self.db.insert(id.to_be_bytes(), data)?)
     }
 }
 
@@ -80,17 +77,18 @@ impl TryFrom<Slice> for DocumentData {
     type Error = Error;
 
     fn try_from(value: Slice) -> Result<Self, Error> {
-        let mut bytes = BytesMut::from(&value[..]);
-        let length = bytes.try_get_u64()?;
-        Ok(DocumentData { length })
+        let mut buffer = Cursor::new(&value[..]);
+        let mut doc_data = DocumentData::zero();
+        doc_data.deserialize(&mut buffer)?;
+        Ok(doc_data)
     }
 }
 
 impl From<&DocumentData> for Slice {
     fn from(value: &DocumentData) -> Self {
-        let mut bytes = BytesMut::with_capacity(8 * 2);
-        bytes.put_u64(value.length);
-        Slice::new(&bytes[..])
+        let mut buffer = Vec::new();
+        value.serialize(&mut buffer).unwrap();
+        Slice::new(&buffer[..])
     }
 }
 
@@ -110,7 +108,7 @@ fn parse_posting_list_key(key: Slice) -> Result<(String, DocumentId), Error> {
         return Err(Error::DeserializationError {});
     }
     let term_length = length - 17;
-    let term = str::from_utf8(&buf[..term_length]).map_err(|e| Error::Utf8Error(e))?;
+    let term = str::from_utf8(&buf[..term_length])?;
     let term = term.to_string();
     buf.advance(term_length);
     let delimiter = buf.get_u8();
@@ -151,7 +149,7 @@ impl PostingListStore {
                 let data = data.try_into()?;
                 Ok((doc_id, data))
             }
-            Err(e) => Err(Error::FjallError(e)),
+            Err(e) => Err(e.into()),
         })
     }
 
@@ -162,9 +160,7 @@ impl PostingListStore {
         data: &DocumentTermData,
     ) -> Result<(), Error> {
         let key = make_posting_list_key(term, document);
-        self.db
-            .insert(&key[..], data)
-            .map_err(|e| Error::FjallError(e))
+        Ok(self.db.insert(&key[..], data)?)
     }
 }
 
@@ -172,17 +168,18 @@ impl TryFrom<Slice> for DocumentTermData {
     type Error = Error;
 
     fn try_from(value: Slice) -> Result<Self, Error> {
-        let mut bytes = BytesMut::from(&value[..]);
-        let count = bytes.try_get_u64()?;
-        Ok(DocumentTermData { count })
+        let mut buffer = Cursor::new(&value[..]);
+        let mut data = DocumentTermData::zero();
+        data.deserialize(buffer.get_mut())?;
+        Ok(data)
     }
 }
 
 impl From<&DocumentTermData> for Slice {
     fn from(value: &DocumentTermData) -> Self {
-        let mut bytes = BytesMut::with_capacity(8 * 2);
-        bytes.put_u64(value.count);
-        Slice::new(&bytes[..])
+        let mut buffer = Vec::new();
+        value.serialize(&mut buffer).unwrap();
+        Slice::new(&buffer[..])
     }
 }
 

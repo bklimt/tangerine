@@ -1,7 +1,3 @@
-use std::str::Utf8Error;
-
-use bytes::TryGetError;
-
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("unable to deserialize data")]
@@ -11,10 +7,13 @@ pub enum Error {
     FjallError(#[from] fjall::Error),
 
     #[error(transparent)]
-    TryGetError(#[from] TryGetError),
+    TryGetError(#[from] bytes::TryGetError),
 
     #[error(transparent)]
-    Utf8Error(#[from] Utf8Error),
+    Utf8Error(#[from] std::str::Utf8Error),
+
+    #[error(transparent)]
+    BrotopufError(#[from] brotopuf::DeserializeError),
 
     #[error(transparent)]
     InnerError(#[from] Box<dyn std::error::Error + Send + Sync>),

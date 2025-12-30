@@ -1,3 +1,4 @@
+use brotopuf::{Deserialize, DeserializeField, Serialize};
 use fjall::Config;
 use ordered_float::OrderedFloat;
 use priority_queue::PriorityQueue;
@@ -9,8 +10,9 @@ use crate::{
 
 pub type DocumentId = u128;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DocumentData {
+    #[id(0)]
     pub length: u64,
 }
 
@@ -20,9 +22,12 @@ impl DocumentData {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TermData {
-    pub count: u64,          // total number of times this term occurred
+    #[id(0)]
+    pub count: u64, // total number of times this term occurred
+
+    #[id(1)]
     pub document_count: u64, // total number of documents this term occurred in
 }
 
@@ -35,8 +40,9 @@ impl TermData {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DocumentTermData {
+    #[id(0)]
     pub count: u64, // the number of times this term occurs in this doc
 }
 
