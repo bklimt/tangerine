@@ -258,8 +258,6 @@ mod tests {
         }
     }
 
-    // TODO: Add tests where various entries are missing.
-    // TODO: Add tests for max doc limit.
     #[test]
     fn test_search_arguments_passed_to_scorer() -> Result<(), Error> {
         let keyspace = Config::new("/tmp/tangerine/test_search_arguments_passed_to_scorer")
@@ -402,6 +400,222 @@ mod tests {
 
         let scorer = SortingScorer {};
         let query: Vec<String> = ["a"].into_iter().map(|s| s.to_string()).collect();
+        let results = index.search(&query, scorer, 10)?;
+
+        assert_eq!(6, results.len());
+        assert_eq!(600, *results.get(0).unwrap());
+        assert_eq!(100, *results.get(1).unwrap());
+        assert_eq!(300, *results.get(2).unwrap());
+        assert_eq!(400, *results.get(3).unwrap());
+        assert_eq!(200, *results.get(4).unwrap());
+        assert_eq!(500, *results.get(5).unwrap());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_max_docs_works() -> Result<(), Error> {
+        let keyspace = Config::new("/tmp/tangerine/test_search_max_docs_works")
+            .open()
+            .unwrap();
+
+        IndexStore::new(&keyspace)
+            .unwrap()
+            .delete(&keyspace)
+            .unwrap();
+
+        let documents: HashMap<u128, DocumentData> = [
+            (100, DocumentData { length: 5 }),
+            (200, DocumentData { length: 2 }),
+            (300, DocumentData { length: 4 }),
+            (400, DocumentData { length: 3 }),
+            (500, DocumentData { length: 1 }),
+            (600, DocumentData { length: 6 }),
+        ]
+        .into_iter()
+        .collect();
+
+        let terms: HashMap<String, TermData> = [(
+            "a".to_string(),
+            TermData {
+                count: 1,
+                document_count: 2,
+            },
+        )]
+        .into_iter()
+        .collect();
+
+        let document_term_data: HashMap<(String, u128), DocumentTermData> = [
+            (("a".to_string(), 100), DocumentTermData { count: 0 }),
+            (("a".to_string(), 200), DocumentTermData { count: 0 }),
+            (("a".to_string(), 300), DocumentTermData { count: 0 }),
+            (("a".to_string(), 400), DocumentTermData { count: 0 }),
+            (("a".to_string(), 500), DocumentTermData { count: 0 }),
+            (("a".to_string(), 600), DocumentTermData { count: 0 }),
+        ]
+        .into_iter()
+        .collect();
+
+        let index = InvertedIndex::new(&keyspace)?;
+
+        for (term, data) in terms.iter() {
+            index.terms().put(&term, data)?;
+        }
+        for (doc, data) in documents.iter() {
+            index.docs().put(*doc, data)?;
+        }
+        for ((term, doc), data) in document_term_data.iter() {
+            index.postings().put(&term, *doc, data)?;
+        }
+
+        let scorer = SortingScorer {};
+        let query: Vec<String> = ["a"].into_iter().map(|s| s.to_string()).collect();
+        let results = index.search(&query, scorer, 3)?;
+
+        assert_eq!(3, results.len());
+        assert_eq!(600, *results.get(0).unwrap());
+        assert_eq!(100, *results.get(1).unwrap());
+        assert_eq!(300, *results.get(2).unwrap());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_with_term_not_id_docs() -> Result<(), Error> {
+        let keyspace = Config::new("/tmp/tangerine/test_search_with_term_not_id_docs")
+            .open()
+            .unwrap();
+
+        IndexStore::new(&keyspace)
+            .unwrap()
+            .delete(&keyspace)
+            .unwrap();
+
+        let documents: HashMap<u128, DocumentData> = [
+            (100, DocumentData { length: 5 }),
+            (200, DocumentData { length: 2 }),
+            (300, DocumentData { length: 4 }),
+            (400, DocumentData { length: 3 }),
+            (500, DocumentData { length: 1 }),
+            (600, DocumentData { length: 6 }),
+        ]
+        .into_iter()
+        .collect();
+
+        let terms: HashMap<String, TermData> = [
+            (
+                "a".to_string(),
+                TermData {
+                    count: 1,
+                    document_count: 2,
+                },
+            ),
+            (
+                "b".to_string(),
+                TermData {
+                    count: 3,
+                    document_count: 4,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let document_term_data: HashMap<(String, u128), DocumentTermData> = [
+            (("a".to_string(), 100), DocumentTermData { count: 0 }),
+            (("a".to_string(), 200), DocumentTermData { count: 0 }),
+            (("a".to_string(), 300), DocumentTermData { count: 0 }),
+            (("a".to_string(), 400), DocumentTermData { count: 0 }),
+            (("a".to_string(), 500), DocumentTermData { count: 0 }),
+            (("a".to_string(), 600), DocumentTermData { count: 0 }),
+        ]
+        .into_iter()
+        .collect();
+
+        let index = InvertedIndex::new(&keyspace)?;
+
+        for (term, data) in terms.iter() {
+            index.terms().put(&term, data)?;
+        }
+        for (doc, data) in documents.iter() {
+            index.docs().put(*doc, data)?;
+        }
+        for ((term, doc), data) in document_term_data.iter() {
+            index.postings().put(&term, *doc, data)?;
+        }
+
+        let scorer = SortingScorer {};
+        let query: Vec<String> = ["a", "b"].into_iter().map(|s| s.to_string()).collect();
+        let results = index.search(&query, scorer, 10)?;
+
+        assert_eq!(6, results.len());
+        assert_eq!(600, *results.get(0).unwrap());
+        assert_eq!(100, *results.get(1).unwrap());
+        assert_eq!(300, *results.get(2).unwrap());
+        assert_eq!(400, *results.get(3).unwrap());
+        assert_eq!(200, *results.get(4).unwrap());
+        assert_eq!(500, *results.get(5).unwrap());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_with_nonexistent_term() -> Result<(), Error> {
+        let keyspace = Config::new("/tmp/tangerine/test_search_with_nonexistent_term")
+            .open()
+            .unwrap();
+
+        IndexStore::new(&keyspace)
+            .unwrap()
+            .delete(&keyspace)
+            .unwrap();
+
+        let documents: HashMap<u128, DocumentData> = [
+            (100, DocumentData { length: 5 }),
+            (200, DocumentData { length: 2 }),
+            (300, DocumentData { length: 4 }),
+            (400, DocumentData { length: 3 }),
+            (500, DocumentData { length: 1 }),
+            (600, DocumentData { length: 6 }),
+        ]
+        .into_iter()
+        .collect();
+
+        let terms: HashMap<String, TermData> = [(
+            "a".to_string(),
+            TermData {
+                count: 1,
+                document_count: 2,
+            },
+        )]
+        .into_iter()
+        .collect();
+
+        let document_term_data: HashMap<(String, u128), DocumentTermData> = [
+            (("a".to_string(), 100), DocumentTermData { count: 0 }),
+            (("a".to_string(), 200), DocumentTermData { count: 0 }),
+            (("a".to_string(), 300), DocumentTermData { count: 0 }),
+            (("a".to_string(), 400), DocumentTermData { count: 0 }),
+            (("a".to_string(), 500), DocumentTermData { count: 0 }),
+            (("a".to_string(), 600), DocumentTermData { count: 0 }),
+        ]
+        .into_iter()
+        .collect();
+
+        let index = InvertedIndex::new(&keyspace)?;
+
+        for (term, data) in terms.iter() {
+            index.terms().put(&term, data)?;
+        }
+        for (doc, data) in documents.iter() {
+            index.docs().put(*doc, data)?;
+        }
+        for ((term, doc), data) in document_term_data.iter() {
+            index.postings().put(&term, *doc, data)?;
+        }
+
+        let scorer = SortingScorer {};
+        let query: Vec<String> = ["a", "b"].into_iter().map(|s| s.to_string()).collect();
         let results = index.search(&query, scorer, 10)?;
 
         assert_eq!(6, results.len());
