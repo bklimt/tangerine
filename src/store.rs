@@ -6,12 +6,50 @@ use brotopuf::{Deserialize, Serialize};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use fjall::{Keyspace, Partition, PartitionCreateOptions, Slice};
 
+pub struct IndexStore {
+    term_store: TermStore,
+    document_store: DocumentStore,
+    posting_list_store: PostingListStore,
+}
+
+impl IndexStore {
+    pub fn new(keyspace: &Keyspace) -> Result<IndexStore, Error> {
+        let term_store = TermStore::with_keyspace(&keyspace)?;
+        let document_store = DocumentStore::with_keyspace(&keyspace)?;
+        let posting_list_store = PostingListStore::with_keyspace(&keyspace)?;
+        Ok(IndexStore {
+            term_store,
+            document_store,
+            posting_list_store,
+        })
+    }
+
+    pub fn terms(&self) -> &TermStore {
+        &self.term_store
+    }
+
+    pub fn documents(&self) -> &DocumentStore {
+        &self.document_store
+    }
+
+    pub fn posting_lists(&self) -> &PostingListStore {
+        &self.posting_list_store
+    }
+
+    pub fn delete(self, keyspace: &Keyspace) -> Result<(), Error> {
+        keyspace.delete_partition(self.term_store.db)?;
+        keyspace.delete_partition(self.document_store.db)?;
+        keyspace.delete_partition(self.posting_list_store.db)?;
+        Ok(())
+    }
+}
+
 pub struct TermStore {
     db: Partition,
 }
 
 impl TermStore {
-    pub fn with_keyspace(keyspace: &Keyspace) -> Result<Self, Error> {
+    fn with_keyspace(keyspace: &Keyspace) -> Result<Self, Error> {
         let options = PartitionCreateOptions::default();
         let db = keyspace.open_partition("terms", options)?;
         Ok(TermStore { db })
@@ -54,7 +92,7 @@ pub struct DocumentStore {
 }
 
 impl DocumentStore {
-    pub fn with_keyspace(keyspace: &Keyspace) -> Result<Self, Error> {
+    fn with_keyspace(keyspace: &Keyspace) -> Result<Self, Error> {
         let options = PartitionCreateOptions::default();
         let db = keyspace.open_partition("docs", options)?;
         Ok(DocumentStore { db })
@@ -132,7 +170,7 @@ pub struct PostingListStore {
 }
 
 impl PostingListStore {
-    pub fn with_keyspace(keyspace: &Keyspace) -> Result<Self, Error> {
+    fn with_keyspace(keyspace: &Keyspace) -> Result<Self, Error> {
         let options = PartitionCreateOptions::default();
         let db = keyspace.open_partition("postings", options)?;
         Ok(PostingListStore { db })
@@ -185,13 +223,17 @@ impl From<&DocumentTermData> for Slice {
 
 #[cfg(test)]
 mod tests {
-    use fjall::Config;
-
     use super::*;
+    use fjall::Config;
 
     #[test]
     fn test_term_store() -> Result<(), Error> {
-        let keyspace = Config::new("/tmp/tangerine/testdata").open()?;
+        let keyspace = Config::new("/tmp/tangerine/test_term_store")
+            .open()
+            .unwrap();
+
+        IndexStore::new(&keyspace)?.delete(&keyspace)?;
+
         let store = TermStore::with_keyspace(&keyspace)?;
 
         let term_data = TermData {
@@ -210,7 +252,12 @@ mod tests {
 
     #[test]
     fn test_document_store() -> Result<(), Error> {
-        let keyspace = Config::new("/tmp/tangerine/testdata").open()?;
+        let keyspace = Config::new("/tmp/tangerine/test_document_store")
+            .open()
+            .unwrap();
+
+        IndexStore::new(&keyspace)?.delete(&keyspace)?;
+
         let store = DocumentStore::with_keyspace(&keyspace)?;
 
         let doc_data = DocumentData { length: 3 };
@@ -225,7 +272,12 @@ mod tests {
 
     #[test]
     fn test_posting_list_store() -> Result<(), Error> {
-        let keyspace = Config::new("/tmp/tangerine/testdata").open()?;
+        let keyspace = Config::new("/tmp/tangerine/test_posting_list_store")
+            .open()
+            .unwrap();
+
+        IndexStore::new(&keyspace)?.delete(&keyspace)?;
+
         let store = PostingListStore::with_keyspace(&keyspace)?;
 
         let doc_data = DocumentTermData { count: 4 };
