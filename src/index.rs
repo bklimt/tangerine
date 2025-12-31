@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use brotopuf::{Deserialize, DeserializeField, Serialize};
 use fjall::Keyspace;
 use ordered_float::OrderedFloat;
@@ -5,12 +7,13 @@ use priority_queue::PriorityQueue;
 
 use crate::{
     error::Error,
+    parse::{TokenProcessor, TokenSlice, parse_text},
     store::{DocumentStore, IndexStore, PostingListStore, TermStore},
 };
 
 pub type DocumentId = u128;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DocumentData {
     #[id(0)]
     pub length: u64,
@@ -22,7 +25,7 @@ impl DocumentData {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct TermData {
     #[id(0)]
     pub count: u64, // total number of times this term occurred
@@ -40,7 +43,7 @@ impl TermData {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DocumentTermData {
     #[id(0)]
     pub count: u64, // the number of times this term occurs in this doc
@@ -49,6 +52,57 @@ pub struct DocumentTermData {
 impl DocumentTermData {
     pub fn zero() -> Self {
         DocumentTermData { count: 0 }
+    }
+}
+
+struct DocProcessor {
+    id: DocumentId,
+    length: u64,
+    terms: HashMap<String, TermData>,
+    doc_terms: HashMap<String, DocumentTermData>,
+}
+
+impl DocProcessor {
+    fn new(id: DocumentId) -> Self {
+        DocProcessor {
+            id,
+            length: 0,
+            terms: HashMap::new(),
+            doc_terms: HashMap::new(),
+        }
+    }
+
+    fn finalize(&self, index: &IndexStore) -> Result<(), Error> {
+        let doc_data = DocumentData {
+            length: self.length,
+        };
+        index.documents().put(self.id, &doc_data)?;
+
+        for (term, term_data) in self.terms.iter() {
+            index.terms().put(term, term_data)?;
+        }
+
+        for (term, doc_term_data) in self.doc_terms.iter() {
+            index.posting_lists().put(term, self.id, doc_term_data)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl TokenProcessor for DocProcessor {
+    fn process_token(&mut self, token: &TokenSlice) {
+        // TODO: Deal with partial matches.
+        let mut term_data = self.terms.remove(token.token).unwrap_or_default();
+        let mut doc_term_data = self.doc_terms.remove(token.token).unwrap_or_default();
+        term_data.count += 1;
+        term_data.document_count = 1;
+        doc_term_data.count += 1;
+        self.terms.insert(token.token.to_string(), term_data);
+        self.doc_terms
+            .insert(token.token.to_string(), doc_term_data);
+
+        self.length = self.length.max((token.occurrence.position + 1) as u64);
     }
 }
 
@@ -90,7 +144,23 @@ impl InvertedIndex {
         self.store.posting_lists()
     }
 
-    // A search where all terms are required.
+    fn new_document_id(&self) -> Result<DocumentId, Error> {
+        self.store.documents().new_id()
+    }
+
+    // Add a document to the index.
+    // If the document is already in the index, this will add it a second itme.
+    pub fn add_document(&self, doc: &mut impl std::io::Read) -> Result<DocumentId, Error> {
+        let id = self.new_document_id()?;
+        let mut processor = DocProcessor::new(id);
+        let mut text = String::new();
+        doc.read_to_string(&mut text)?;
+        parse_text(&text, &mut processor);
+        processor.finalize(&self.store)?;
+        Ok(id)
+    }
+
+    // Search for docs that have any of the words.
     pub fn search(
         &self,
         terms: &[String],

@@ -10,6 +10,9 @@ pub enum Error {
     TryGetError(#[from] bytes::TryGetError),
 
     #[error(transparent)]
+    IoError(#[from] std::io::Error),
+
+    #[error(transparent)]
     Utf8Error(#[from] std::str::Utf8Error),
 
     #[error(transparent)]

@@ -109,6 +109,21 @@ impl DocumentStore {
     pub fn put(&self, id: DocumentId, data: &DocumentData) -> Result<(), Error> {
         Ok(self.db.insert(id.to_be_bytes(), data)?)
     }
+
+    pub fn new_id(&self) -> Result<DocumentId, Error> {
+        let mut id = self.db.approximate_len() as DocumentId;
+        loop {
+            match self.get(id)? {
+                Some(_) => {
+                    id += 1;
+                    continue;
+                }
+                None => {
+                    return Ok(id);
+                }
+            }
+        }
+    }
 }
 
 impl TryFrom<Slice> for DocumentData {
