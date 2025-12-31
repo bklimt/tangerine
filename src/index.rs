@@ -16,13 +16,10 @@ pub type DocumentId = u128;
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DocumentData {
     #[id(0)]
-    pub length: u64,
-}
+    pub path: String,
 
-impl DocumentData {
-    pub fn zero() -> Self {
-        DocumentData { length: 0 }
-    }
+    #[id(1)]
+    pub length: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -34,38 +31,30 @@ pub struct TermData {
     pub document_count: u64, // total number of documents this term occurred in
 }
 
-impl TermData {
-    pub fn zero() -> Self {
-        TermData {
-            count: 0,
-            document_count: 0,
-        }
-    }
-}
-
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DocumentTermData {
     #[id(0)]
-    pub count: u64, // the number of times this term occurs in this doc
-}
+    pub body_count: u64, // the number of times this term occurs in this doc
 
-impl DocumentTermData {
-    pub fn zero() -> Self {
-        DocumentTermData { count: 0 }
-    }
+    #[id(1)]
+    pub path_count: u64, // the number of times this term occurs in this doc's path
 }
 
 struct DocProcessor {
     id: DocumentId,
+    path: String,
+    in_path: bool,
     length: u64,
     terms: HashMap<String, TermData>,
     doc_terms: HashMap<String, DocumentTermData>,
 }
 
 impl DocProcessor {
-    fn new(id: DocumentId) -> Self {
+    fn new(id: DocumentId, path: &str) -> Self {
         DocProcessor {
             id,
+            path: path.to_string(),
+            in_path: false,
             length: 0,
             terms: HashMap::new(),
             doc_terms: HashMap::new(),
@@ -74,6 +63,7 @@ impl DocProcessor {
 
     fn finalize(&self, index: &IndexStore) -> Result<(), Error> {
         let doc_data = DocumentData {
+            path: self.path.clone(),
             length: self.length,
         };
         index.documents().put(self.id, &doc_data)?;
@@ -97,7 +87,11 @@ impl TokenProcessor for DocProcessor {
         let mut doc_term_data = self.doc_terms.remove(token.token).unwrap_or_default();
         term_data.count += 1;
         term_data.document_count = 1;
-        doc_term_data.count += 1;
+        if self.in_path {
+            doc_term_data.path_count += 1;
+        } else {
+            doc_term_data.body_count += 1;
+        }
         self.terms.insert(token.token.to_string(), term_data);
         self.doc_terms
             .insert(token.token.to_string(), doc_term_data);
@@ -150,10 +144,17 @@ impl InvertedIndex {
 
     // Add a document to the index.
     // If the document is already in the index, this will add it a second itme.
-    pub fn add_document(&self, doc: &mut impl std::io::Read) -> Result<DocumentId, Error> {
+    pub fn add_document(
+        &self,
+        path: &str,
+        doc: &mut impl std::io::Read,
+    ) -> Result<DocumentId, Error> {
         let id = self.new_document_id()?;
-        let mut processor = DocProcessor::new(id);
+        let mut processor = DocProcessor::new(id, path);
         let mut text = String::new();
+        processor.in_path = true;
+        parse_text(path, &mut processor);
+        processor.in_path = false;
         doc.read_to_string(&mut text)?;
         parse_text(&text, &mut processor);
         processor.finalize(&self.store)?;
@@ -173,7 +174,7 @@ impl InvertedIndex {
         let term_data = term_data?;
         let term_data: Vec<TermData> = term_data
             .into_iter()
-            .map(|item| item.unwrap_or(TermData::zero()))
+            .map(|item| item.unwrap_or(TermData::default()))
             .collect();
 
         // Look up all the posting lists.
@@ -208,7 +209,10 @@ impl InvertedIndex {
             };
 
             // Grab the data for that doc.
-            let doc_data = self.docs().get(first_doc)?.unwrap_or(DocumentData::zero());
+            let doc_data = self
+                .docs()
+                .get(first_doc)?
+                .unwrap_or(DocumentData::default());
 
             // Grab the data for each term in this doc.
             let mut doc_term_data: Vec<DocumentTermData> = Vec::new();
@@ -220,7 +224,7 @@ impl InvertedIndex {
                                 let (_, data) = posting.next().unwrap().unwrap();
                                 doc_term_data.push(data);
                             } else {
-                                doc_term_data.push(DocumentTermData::zero());
+                                doc_term_data.push(DocumentTermData::default());
                             }
                         }
                         Err(_) => return Err(posting.next().unwrap().unwrap_err()),
@@ -288,14 +292,17 @@ mod tests {
 
             match doc_id {
                 100 => {
+                    assert_eq!("/one/hundred", doc_data.path);
                     assert_eq!(101, doc_data.length);
                     for (term, doc_term_data) in zip(terms, doc_term_data) {
                         match term.as_str() {
                             "a" => {
-                                assert_eq!(5, doc_term_data.count);
+                                assert_eq!(15, doc_term_data.path_count);
+                                assert_eq!(5, doc_term_data.body_count);
                             }
                             "b" => {
-                                assert_eq!(6, doc_term_data.count);
+                                assert_eq!(16, doc_term_data.path_count);
+                                assert_eq!(6, doc_term_data.body_count);
                             }
                             _ => {
                                 assert!(false, "unknown term {}", term);
@@ -304,14 +311,17 @@ mod tests {
                     }
                 }
                 200 => {
+                    assert_eq!("/two/hundred", doc_data.path);
                     assert_eq!(201, doc_data.length);
                     for (term, doc_term_data) in zip(terms, doc_term_data) {
                         match term.as_str() {
                             "a" => {
-                                assert_eq!(7, doc_term_data.count);
+                                assert_eq!(17, doc_term_data.path_count);
+                                assert_eq!(7, doc_term_data.body_count);
                             }
                             "b" => {
-                                assert_eq!(8, doc_term_data.count);
+                                assert_eq!(18, doc_term_data.path_count);
+                                assert_eq!(8, doc_term_data.body_count);
                             }
                             _ => {
                                 assert!(false, "unknown term {}", term);
@@ -359,17 +369,53 @@ mod tests {
         .collect();
 
         let documents: HashMap<u128, DocumentData> = [
-            (100, DocumentData { length: 101 }),
-            (200, DocumentData { length: 201 }),
+            (
+                100,
+                DocumentData {
+                    path: "/one/hundred".to_string(),
+                    length: 101,
+                },
+            ),
+            (
+                200,
+                DocumentData {
+                    path: "/two/hundred".to_string(),
+                    length: 201,
+                },
+            ),
         ]
         .into_iter()
         .collect();
 
         let document_term_data: HashMap<(String, u128), DocumentTermData> = [
-            (("a".to_string(), 100), DocumentTermData { count: 5 }),
-            (("b".to_string(), 100), DocumentTermData { count: 6 }),
-            (("a".to_string(), 200), DocumentTermData { count: 7 }),
-            (("b".to_string(), 200), DocumentTermData { count: 8 }),
+            (
+                ("a".to_string(), 100),
+                DocumentTermData {
+                    body_count: 5,
+                    path_count: 15,
+                },
+            ),
+            (
+                ("b".to_string(), 100),
+                DocumentTermData {
+                    body_count: 6,
+                    path_count: 16,
+                },
+            ),
+            (
+                ("a".to_string(), 200),
+                DocumentTermData {
+                    body_count: 7,
+                    path_count: 17,
+                },
+            ),
+            (
+                ("b".to_string(), 200),
+                DocumentTermData {
+                    body_count: 8,
+                    path_count: 18,
+                },
+            ),
         ]
         .into_iter()
         .collect();
@@ -425,12 +471,48 @@ mod tests {
             .unwrap();
 
         let documents: HashMap<u128, DocumentData> = [
-            (100, DocumentData { length: 5 }),
-            (200, DocumentData { length: 2 }),
-            (300, DocumentData { length: 4 }),
-            (400, DocumentData { length: 3 }),
-            (500, DocumentData { length: 1 }),
-            (600, DocumentData { length: 6 }),
+            (
+                100,
+                DocumentData {
+                    path: "/hundred/one".to_string(),
+                    length: 5,
+                },
+            ),
+            (
+                200,
+                DocumentData {
+                    path: "/hundred/two".to_string(),
+                    length: 2,
+                },
+            ),
+            (
+                300,
+                DocumentData {
+                    path: "/hundred/three".to_string(),
+                    length: 4,
+                },
+            ),
+            (
+                400,
+                DocumentData {
+                    path: "/hundred/four".to_string(),
+                    length: 3,
+                },
+            ),
+            (
+                500,
+                DocumentData {
+                    path: "/hundred/five".to_string(),
+                    length: 1,
+                },
+            ),
+            (
+                600,
+                DocumentData {
+                    path: "/hundred/six".to_string(),
+                    length: 6,
+                },
+            ),
         ]
         .into_iter()
         .collect();
@@ -446,12 +528,12 @@ mod tests {
         .collect();
 
         let document_term_data: HashMap<(String, u128), DocumentTermData> = [
-            (("a".to_string(), 100), DocumentTermData { count: 0 }),
-            (("a".to_string(), 200), DocumentTermData { count: 0 }),
-            (("a".to_string(), 300), DocumentTermData { count: 0 }),
-            (("a".to_string(), 400), DocumentTermData { count: 0 }),
-            (("a".to_string(), 500), DocumentTermData { count: 0 }),
-            (("a".to_string(), 600), DocumentTermData { count: 0 }),
+            (("a".to_string(), 100), DocumentTermData::default()),
+            (("a".to_string(), 200), DocumentTermData::default()),
+            (("a".to_string(), 300), DocumentTermData::default()),
+            (("a".to_string(), 400), DocumentTermData::default()),
+            (("a".to_string(), 500), DocumentTermData::default()),
+            (("a".to_string(), 600), DocumentTermData::default()),
         ]
         .into_iter()
         .collect();
@@ -495,12 +577,48 @@ mod tests {
             .unwrap();
 
         let documents: HashMap<u128, DocumentData> = [
-            (100, DocumentData { length: 5 }),
-            (200, DocumentData { length: 2 }),
-            (300, DocumentData { length: 4 }),
-            (400, DocumentData { length: 3 }),
-            (500, DocumentData { length: 1 }),
-            (600, DocumentData { length: 6 }),
+            (
+                100,
+                DocumentData {
+                    path: "/hundred/one".to_string(),
+                    length: 5,
+                },
+            ),
+            (
+                200,
+                DocumentData {
+                    path: "/hundred/two".to_string(),
+                    length: 2,
+                },
+            ),
+            (
+                300,
+                DocumentData {
+                    path: "/hundred/three".to_string(),
+                    length: 4,
+                },
+            ),
+            (
+                400,
+                DocumentData {
+                    path: "/hundred/four".to_string(),
+                    length: 3,
+                },
+            ),
+            (
+                500,
+                DocumentData {
+                    path: "/hundred/five".to_string(),
+                    length: 1,
+                },
+            ),
+            (
+                600,
+                DocumentData {
+                    path: "/hundred/six".to_string(),
+                    length: 6,
+                },
+            ),
         ]
         .into_iter()
         .collect();
@@ -516,12 +634,12 @@ mod tests {
         .collect();
 
         let document_term_data: HashMap<(String, u128), DocumentTermData> = [
-            (("a".to_string(), 100), DocumentTermData { count: 0 }),
-            (("a".to_string(), 200), DocumentTermData { count: 0 }),
-            (("a".to_string(), 300), DocumentTermData { count: 0 }),
-            (("a".to_string(), 400), DocumentTermData { count: 0 }),
-            (("a".to_string(), 500), DocumentTermData { count: 0 }),
-            (("a".to_string(), 600), DocumentTermData { count: 0 }),
+            (("a".to_string(), 100), DocumentTermData::default()),
+            (("a".to_string(), 200), DocumentTermData::default()),
+            (("a".to_string(), 300), DocumentTermData::default()),
+            (("a".to_string(), 400), DocumentTermData::default()),
+            (("a".to_string(), 500), DocumentTermData::default()),
+            (("a".to_string(), 600), DocumentTermData::default()),
         ]
         .into_iter()
         .collect();
@@ -562,12 +680,48 @@ mod tests {
             .unwrap();
 
         let documents: HashMap<u128, DocumentData> = [
-            (100, DocumentData { length: 5 }),
-            (200, DocumentData { length: 2 }),
-            (300, DocumentData { length: 4 }),
-            (400, DocumentData { length: 3 }),
-            (500, DocumentData { length: 1 }),
-            (600, DocumentData { length: 6 }),
+            (
+                100,
+                DocumentData {
+                    path: "/hundred/one".to_string(),
+                    length: 5,
+                },
+            ),
+            (
+                200,
+                DocumentData {
+                    path: "/hundred/two".to_string(),
+                    length: 2,
+                },
+            ),
+            (
+                300,
+                DocumentData {
+                    path: "/hundred/three".to_string(),
+                    length: 4,
+                },
+            ),
+            (
+                400,
+                DocumentData {
+                    path: "/hundred/four".to_string(),
+                    length: 3,
+                },
+            ),
+            (
+                500,
+                DocumentData {
+                    path: "/hundred/five".to_string(),
+                    length: 1,
+                },
+            ),
+            (
+                600,
+                DocumentData {
+                    path: "/hundred/six".to_string(),
+                    length: 6,
+                },
+            ),
         ]
         .into_iter()
         .collect();
@@ -592,12 +746,12 @@ mod tests {
         .collect();
 
         let document_term_data: HashMap<(String, u128), DocumentTermData> = [
-            (("a".to_string(), 100), DocumentTermData { count: 0 }),
-            (("a".to_string(), 200), DocumentTermData { count: 0 }),
-            (("a".to_string(), 300), DocumentTermData { count: 0 }),
-            (("a".to_string(), 400), DocumentTermData { count: 0 }),
-            (("a".to_string(), 500), DocumentTermData { count: 0 }),
-            (("a".to_string(), 600), DocumentTermData { count: 0 }),
+            (("a".to_string(), 100), DocumentTermData::default()),
+            (("a".to_string(), 200), DocumentTermData::default()),
+            (("a".to_string(), 300), DocumentTermData::default()),
+            (("a".to_string(), 400), DocumentTermData::default()),
+            (("a".to_string(), 500), DocumentTermData::default()),
+            (("a".to_string(), 600), DocumentTermData::default()),
         ]
         .into_iter()
         .collect();
@@ -641,12 +795,48 @@ mod tests {
             .unwrap();
 
         let documents: HashMap<u128, DocumentData> = [
-            (100, DocumentData { length: 5 }),
-            (200, DocumentData { length: 2 }),
-            (300, DocumentData { length: 4 }),
-            (400, DocumentData { length: 3 }),
-            (500, DocumentData { length: 1 }),
-            (600, DocumentData { length: 6 }),
+            (
+                100,
+                DocumentData {
+                    path: "/hundred/one".to_string(),
+                    length: 5,
+                },
+            ),
+            (
+                200,
+                DocumentData {
+                    path: "/hundred/two".to_string(),
+                    length: 2,
+                },
+            ),
+            (
+                300,
+                DocumentData {
+                    path: "/hundred/three".to_string(),
+                    length: 4,
+                },
+            ),
+            (
+                400,
+                DocumentData {
+                    path: "/hundred/four".to_string(),
+                    length: 3,
+                },
+            ),
+            (
+                500,
+                DocumentData {
+                    path: "/hundred/five".to_string(),
+                    length: 1,
+                },
+            ),
+            (
+                600,
+                DocumentData {
+                    path: "/hundred/six".to_string(),
+                    length: 6,
+                },
+            ),
         ]
         .into_iter()
         .collect();
@@ -662,12 +852,12 @@ mod tests {
         .collect();
 
         let document_term_data: HashMap<(String, u128), DocumentTermData> = [
-            (("a".to_string(), 100), DocumentTermData { count: 0 }),
-            (("a".to_string(), 200), DocumentTermData { count: 0 }),
-            (("a".to_string(), 300), DocumentTermData { count: 0 }),
-            (("a".to_string(), 400), DocumentTermData { count: 0 }),
-            (("a".to_string(), 500), DocumentTermData { count: 0 }),
-            (("a".to_string(), 600), DocumentTermData { count: 0 }),
+            (("a".to_string(), 100), DocumentTermData::default()),
+            (("a".to_string(), 200), DocumentTermData::default()),
+            (("a".to_string(), 300), DocumentTermData::default()),
+            (("a".to_string(), 400), DocumentTermData::default()),
+            (("a".to_string(), 500), DocumentTermData::default()),
+            (("a".to_string(), 600), DocumentTermData::default()),
         ]
         .into_iter()
         .collect();

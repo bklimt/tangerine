@@ -73,7 +73,7 @@ impl TryFrom<Slice> for TermData {
 
     fn try_from(value: Slice) -> Result<Self, Error> {
         let mut buffer = Cursor::new(&value[..]);
-        let mut term_data = TermData::zero();
+        let mut term_data = TermData::default();
         term_data.deserialize(buffer.get_mut())?;
         Ok(term_data)
     }
@@ -131,7 +131,7 @@ impl TryFrom<Slice> for DocumentData {
 
     fn try_from(value: Slice) -> Result<Self, Error> {
         let mut buffer = Cursor::new(&value[..]);
-        let mut doc_data = DocumentData::zero();
+        let mut doc_data = DocumentData::default();
         doc_data.deserialize(&mut buffer)?;
         Ok(doc_data)
     }
@@ -222,7 +222,7 @@ impl TryFrom<Slice> for DocumentTermData {
 
     fn try_from(value: Slice) -> Result<Self, Error> {
         let mut buffer = Cursor::new(&value[..]);
-        let mut data = DocumentTermData::zero();
+        let mut data = DocumentTermData::default();
         data.deserialize(buffer.get_mut())?;
         Ok(data)
     }
@@ -275,11 +275,15 @@ mod tests {
 
         let store = DocumentStore::with_keyspace(&keyspace)?;
 
-        let doc_data = DocumentData { length: 3 };
+        let doc_data = DocumentData {
+            path: "/some/path".to_string(),
+            length: 3,
+        };
         store.put(123, &doc_data)?;
 
         let actual = store.get(123)?.unwrap();
 
+        assert_eq!("/some/path", actual.path);
         assert_eq!(3, actual.length);
 
         Ok(())
@@ -295,10 +299,16 @@ mod tests {
 
         let store = PostingListStore::with_keyspace(&keyspace)?;
 
-        let doc_data = DocumentTermData { count: 4 };
+        let doc_data = DocumentTermData {
+            path_count: 44,
+            body_count: 4,
+        };
         store.put("a", 1, &doc_data)?;
 
-        let doc_data = DocumentTermData { count: 5 };
+        let doc_data = DocumentTermData {
+            path_count: 55,
+            body_count: 5,
+        };
         store.put("a", 2, &doc_data)?;
 
         let result: Result<Vec<(DocumentId, DocumentTermData)>, Error> = store.get("a").collect();
@@ -307,11 +317,13 @@ mod tests {
 
         let (result_doc, result_data) = result.get(0).unwrap();
         assert_eq!(1u128, *result_doc);
-        assert_eq!(4, result_data.count);
+        assert_eq!(4, result_data.body_count);
+        assert_eq!(44, result_data.path_count);
 
         let (result_doc, result_data) = result.get(1).unwrap();
         assert_eq!(2u128, *result_doc);
-        assert_eq!(5, result_data.count);
+        assert_eq!(5, result_data.body_count);
+        assert_eq!(55, result_data.path_count);
 
         Ok(())
     }
